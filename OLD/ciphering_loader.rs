@@ -132,42 +132,6 @@ fn shellcode_loader(shellcode: &[u8]){
 
 }
 
-extern "system" {
-    fn LoadLibraryA(name: *const i8) -> *mut core::ffi::c_void;
-    fn GetProcAddress(module: *mut core::ffi::c_void, proc_name: *const i8) -> *mut core::ffi::c_void;
-}
-
-type MessageBoxAFn = unsafe extern "system" fn(
-    h_wnd: *mut core::ffi::c_void,
-    lp_text: *const i8,
-    lp_caption: *const i8,
-    u_type: u32,
-) -> i32;
-
-fn winapi_call(){
-    use std::ffi::CString;
-    use std::ptr;
-    use std::mem;
-
-    unsafe {
-        let lib_name = CString::new("user32.dll").unwrap();
-        let module = LoadLibraryA(lib_name.as_ptr());
-        assert!(!module.is_null(), "Échec de LoadLibraryA");
-
-        let func_name = CString::new("MessageBoxA").unwrap();
-        let proc_addr = GetProcAddress(module, func_name.as_ptr());
-        assert!(!proc_addr.is_null(), "Échec de GetProcAddress");
-
-        let message_box: MessageBoxAFn = mem::transmute(proc_addr);
-
-        let text = CString::new("Hello from dynamically resolved MessageBoxA!").unwrap();
-        let caption = CString::new("Dynamic Call").unwrap();
-
-        message_box(ptr::null_mut(), text.as_ptr(), caption.as_ptr(), 0);
-    }
-
-}
-
 // 3. Fonction principale
 fn main() -> windows::core::Result<()> {
     println!("=== Début du Shellcode Loader ===");
