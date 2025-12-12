@@ -2,13 +2,14 @@
 
 use std::ffi::c_void;
 
-
+/// Internal representation of a doubly-linked list (PEB module list)
 #[repr(C)]
 pub struct LIST_ENTRY {
     flink: *mut LIST_ENTRY,
     blink: *mut LIST_ENTRY,
 }
 
+/// Manual representation of UNICODE_STRING used in LDR entries
 #[repr(C)]
 pub struct UNICODE_STRING {
     length: u16,           // en bytes
@@ -16,6 +17,8 @@ pub struct UNICODE_STRING {
     buffer: *mut u16,
 }
 
+
+/// Convert UNICODE_STRING to lowercase Rust String (ASCII only)
 pub unsafe fn unicode_to_string(unicode: &UNICODE_STRING) -> String {
     if unicode.buffer.is_null() || unicode.length == 0 {
         return String::new();
@@ -31,6 +34,8 @@ pub unsafe fn unicode_to_string(unicode: &UNICODE_STRING) -> String {
     result.to_lowercase()
 }
 
+
+/// Walk the PEB -> LDR -> InLoadOrderModuleList to locate ntdll.dll base address
 pub unsafe fn find_ntdll_simple() -> Option<*mut c_void> {
     
     // Obtenir le PEB
@@ -41,14 +46,14 @@ pub unsafe fn find_ntdll_simple() -> Option<*mut c_void> {
     }
     
     
-    // PEB_LDR_DATA à offset 0x18 (0x18 / 8 = 3 car *mut c_void = 8 bytes)
+    // PEB_LDR_DATA is at offset 0x18 from PEB
     let ldr_data = *(peb as *mut *mut c_void).offset(0x3);
 
     if ldr_data.is_null() {
         return None;
     }
 
-    // InLoadOrderModuleList à offset 0x10 (0x10 / 8 = 2)
+    // InLoadOrderModuleList is at offset 0x10 within LDR_DATA
     let first_module = *(ldr_data as *mut *mut LIST_ENTRY).offset(0x2);
 
     let mut current = first_module;
@@ -59,14 +64,14 @@ pub unsafe fn find_ntdll_simple() -> Option<*mut c_void> {
 
         let ldr_entry = current as *mut c_void;
         
-        // BaseDllName à offset 0x58
+        // BaseDllName at offset 0x58 from LDR_MODULE
         let base_dll_name_ptr = ldr_entry.byte_offset(0x58) as *const UNICODE_STRING;
         let base_dll_name = &*base_dll_name_ptr;
         
         let name = unicode_to_string(base_dll_name);
         
         if name.contains("ntdll.dll") {
-            // DllBase à offset 0x30
+            // DllBase at offset 0x30
             let dll_base = *(ldr_entry.byte_offset(0x30) as *const *mut c_void);
             return Some(dll_base);
         }
@@ -80,6 +85,9 @@ pub unsafe fn find_ntdll_simple() -> Option<*mut c_void> {
     None
 }
 
+
+/// Simple FNV-1a hash (modified) for function name hashing
+/// Null terminator is explicitly hashed
 pub fn simple_hash(data: &str) -> u32 {
     let mut hash: u32 = 0x811C9DC5;
     
@@ -95,6 +103,8 @@ pub fn simple_hash(data: &str) -> u32 {
     hash
 }
 
+
+/// Parse PE export table manually to find function address by FNV hash
 pub unsafe fn find_function_by_hash(module_base: *mut c_void, target_hash: u32) -> Option<*mut c_void> {
     
     // DOS Header
@@ -114,7 +124,7 @@ pub unsafe fn find_function_by_hash(module_base: *mut c_void, target_hash: u32) 
         return None;
     }
 
-    // Export Directory RVA (DataDirectory[0])
+    // Export Directory in OptionalHeader.DataDirectory[0]
     let export_dir_rva = *(pe_header.byte_offset(0x88) as *const u32);
     let export_dir_size = *(pe_header.byte_offset(0x8C) as *const u32);
     
@@ -125,7 +135,7 @@ pub unsafe fn find_function_by_hash(module_base: *mut c_void, target_hash: u32) 
 
     let export_table = module_base.byte_offset((export_dir_rva as usize).try_into().unwrap());
 
-    // Pointeurs dans l'export table
+    // Extract pointers from IMAGE_EXPORT_DIRECTORY
     let names_rva = *(export_table.byte_offset(0x20) as *const u32);
     let ordinals_rva = *(export_table.byte_offset(0x24) as *const u32);
     let functions_rva = *(export_table.byte_offset(0x1C) as *const u32);
@@ -136,12 +146,12 @@ pub unsafe fn find_function_by_hash(module_base: *mut c_void, target_hash: u32) 
     let ordinals_array = module_base.byte_offset((ordinals_rva as usize).try_into().unwrap()) as *const u16;
     let functions_array = module_base.byte_offset((functions_rva as usize).try_into().unwrap()) as *const u32;
 
-    // Parcourir les noms des fonctions
+    // Iterate over exported function names
     for i in 0..names_count {
         let name_rva = *names_array.offset(i as isize);
         let name_ptr = module_base.byte_offset((name_rva as usize).try_into().unwrap()) as *const i8;
 
-        // Calculer le hash
+        // Hash function name inline without allocating strings
         let mut hash: u32 = 0x811C9DC5;
         let mut j = 0;
         let mut func_name = String::new();
@@ -161,6 +171,7 @@ pub unsafe fn find_function_by_hash(module_base: *mut c_void, target_hash: u32) 
         hash ^= 0;
         hash = hash.wrapping_mul(0x01000193);
 
+        // Match hash
         if hash == target_hash {
             let ordinal = *ordinals_array.offset(i as isize);
             let function_rva = *functions_array.offset(ordinal as isize);
